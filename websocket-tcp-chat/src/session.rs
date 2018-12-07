@@ -8,15 +8,19 @@ use tokio_codec::FramedRead;
 use tokio_io::io::WriteHalf;
 use tokio_io::AsyncRead;
 use tokio_tcp::{TcpListener, TcpStream};
+use tokio_io::codec::{Decoder, Encoder};
 
 use actix::prelude::*;
 
-use codec::{ChatCodec, ChatRequest, ChatResponse};
+use codec::{ChatRequest, ChatResponse};
 use server::{self, ChatServer};
 
 /// Chat server sends this messages to session
 #[derive(Message)]
 pub struct Message(pub String);
+
+type ChatEncoder = tokio_codec::Encoder<Item=ChatResponse,Error=io::Error>;
+type ChatDecoder = tokio_codec::Decoder<Item=ChatResponse,Error=io::Error>;
 
 /// `ChatSession` actor is responsible for tcp peer communications.
 pub struct ChatSession {
@@ -30,7 +34,7 @@ pub struct ChatSession {
     /// joined room
     room: String,
     /// Framed wrapper
-    framed: actix::io::FramedWrite<WriteHalf<TcpStream>, ChatCodec>,
+    framed: actix::io::FramedWrite<WriteHalf<TcpStream>, ChatEncoder>,
 }
 
 impl Actor for ChatSession {
@@ -134,7 +138,7 @@ impl Handler<Message> for ChatSession {
 impl ChatSession {
     pub fn new(
         addr: Addr<ChatServer>,
-        framed: actix::io::FramedWrite<WriteHalf<TcpStream>, ChatCodec>,
+        framed: actix::io::FramedWrite<WriteHalf<TcpStream>, ChatEncoder>,
     ) -> ChatSession {
         ChatSession {
             id: 0,
@@ -172,10 +176,12 @@ impl ChatSession {
 /// chat actors.
 pub struct TcpServer {
     chat: Addr<ChatServer>,
+    encoder: ChatEncoder,
+    decoder: ChatDecoder,
 }
 
 impl TcpServer {
-    pub fn new(s: &str, chat: Addr<ChatServer>) {
+    pub fn new(s: &str, chat: Addr<ChatServer>, encoder: ChatEncoder, decoder: ChatDecoder) {
         // Create server listener
         let addr = net::SocketAddr::from_str("127.0.0.1:12345").unwrap();
         let listener = TcpListener::bind(&addr).unwrap();
@@ -190,7 +196,7 @@ impl TcpServer {
             ctx.add_message_stream(
                 listener.incoming().map_err(|_| ()).map(|s| TcpConnect(s)),
             );
-            TcpServer { chat: chat }
+            TcpServer { chat: chat, encoder, decoder }
         });
     }
 }
@@ -214,8 +220,8 @@ impl Handler<TcpConnect> for TcpServer {
         let server = self.chat.clone();
         ChatSession::create(|ctx| {
             let (r, w) = msg.0.split();
-            ChatSession::add_stream(FramedRead::new(r, ChatCodec), ctx);
-            ChatSession::new(server, actix::io::FramedWrite::new(w, ChatCodec, ctx))
+            ChatSession::add_stream(FramedRead::new(r, self.decoder), ctx);
+            ChatSession::new(server, actix::io::FramedWrite::new(w, self.encoder, ctx))
         });
     }
 }

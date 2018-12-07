@@ -233,8 +233,9 @@ fn main() {
 
     // Start tcp server in separate thread
     let srv = server.clone();
+    let c = codec::ChatCodec;
     Arbiter::new("tcp-server").do_send::<msgs::Execute>(msgs::Execute::new(move || {
-        session::TcpServer::new("127.0.0.1:12345", srv);
+        session::TcpServer::new("127.0.0.1:12345", srv, c, c);
         Ok(())
     }));
 
